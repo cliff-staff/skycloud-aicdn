@@ -6,11 +6,23 @@ import datetime
 import secrets
 from urllib.parse import urlparse
 
-# ── 帳號設定（可改） ──────────────────────────────────────────────────────────
-ADMIN_USERNAME = os.environ.get('ADMIN_USER', 'admin')
-ADMIN_PASSWORD = os.environ.get('ADMIN_PASS', 'skycloud2026')
+BASE = os.path.dirname(__file__)
+DATA_FILE   = os.path.join(BASE, 'leads.json')
+CONFIG_FILE = os.path.join(BASE, 'config.json')
 
-DATA_FILE = os.path.join(os.path.dirname(__file__), 'leads.json')
+# ── 帳號設定：優先讀 config.json，沒有就用預設值建立檔案 ────────────────────
+def load_config():
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    cfg = {'username': os.environ.get('ADMIN_USER', 'admin'),
+           'password': os.environ.get('ADMIN_PASS', 'skycloud2026')}
+    save_config(cfg)
+    return cfg
+
+def save_config(cfg):
+    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
 
 # 執行期 session tokens（重啟後失效，需重新登入）
 _sessions = set()
@@ -28,8 +40,7 @@ def save_leads(leads):
 class Handler(http.server.SimpleHTTPRequestHandler):
 
     def _auth(self):
-        token = self.headers.get('X-Token', '')
-        return token in _sessions
+        return self.headers.get('X-Token', '') in _sessions
 
     def do_GET(self):
         path = urlparse(self.path).path
@@ -49,7 +60,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         data = json.loads(self.rfile.read(length)) if length else {}
 
         if path == '/api/login':
-            if data.get('username') == ADMIN_USERNAME and data.get('password') == ADMIN_PASSWORD:
+            cfg = load_config()
+            if data.get('username') == cfg['username'] and data.get('password') == cfg['password']:
                 token = secrets.token_hex(32)
                 _sessions.add(token)
                 self._json(200, {'success': True, 'token': token})
@@ -60,12 +72,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             _sessions.discard(self.headers.get('X-Token', ''))
             self._json(200, {'success': True})
 
+        elif path == '/api/change-password':
+            if not self._auth():
+                return self._json(401, {'success': False, 'error': 'Unauthorized'})
+            cfg = load_config()
+            if data.get('current') != cfg['password']:
+                return self._json(400, {'success': False, 'error': '目前密碼錯誤'})
+            new_pw = data.get('new', '').strip()
+            if len(new_pw) < 6:
+                return self._json(400, {'success': False, 'error': '新密碼至少需要 6 個字元'})
+            cfg['password'] = new_pw
+            save_config(cfg)
+            self._json(200, {'success': True})
+
         elif path == '/api/leads':
-            # 表單送出（前台）不需驗證，後台操作需驗證
             action = data.get('action', 'addRow')
             if action != 'addRow' and not self._auth():
                 return self._json(401, {'success': False, 'error': 'Unauthorized'})
-
             leads = load_leads()
             if action == 'addRow':
                 leads.append({
@@ -83,7 +106,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 })
                 save_leads(leads)
                 self._json(200, {'success': True})
-
             elif action == 'updateRow':
                 idx = (data.get('rowIndex') or 2) - 2
                 if 0 <= idx < len(leads):
@@ -112,6 +134,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}]", fmt % args)
 
 if __name__ == '__main__':
-    print(f'Admin: {ADMIN_USERNAME} / {ADMIN_PASSWORD}')
+    cfg = load_config()
+    print(f'Admin: {cfg["username"]} / {cfg["password"]}')
     print('Server running on http://localhost:8765')
     http.server.HTTPServer(('', 8765), Handler).serve_forever()

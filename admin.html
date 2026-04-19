@@ -306,6 +306,27 @@
     min-height: 18px;
   }
 
+  /* CHANGE PASSWORD MODAL */
+  .pw-modal-overlay {
+    display: none; position: fixed; inset: 0; z-index: 500;
+    background: rgba(0,0,0,0.4); align-items: center; justify-content: center;
+  }
+  .pw-modal-overlay.open { display: flex; }
+  .pw-modal {
+    background: var(--white); border-radius: 14px;
+    box-shadow: var(--shadow-lg); padding: 36px 32px; width: 340px;
+  }
+  .pw-modal h3 { font-size: 16px; font-weight: 700; margin-bottom: 20px; color: var(--gray-900); }
+  .pw-modal input {
+    width: 100%; padding: 9px 12px; border: 1px solid var(--gray-200);
+    border-radius: 8px; font-size: 13px; margin-bottom: 12px;
+    font-family: 'Noto Sans TC', sans-serif; outline: none; box-sizing: border-box;
+    transition: border-color 0.15s;
+  }
+  .pw-modal input:focus { border-color: var(--blue); }
+  .pw-modal-footer { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+  .pw-error { color: #DC2626; font-size: 12px; min-height: 16px; margin-bottom: 8px; }
+
   /* RESPONSIVE */
   @media (max-width: 900px) {
     .sidebar { display: none; }
@@ -344,7 +365,8 @@
     <div class="nav-item active"><span class="nav-icon">📋</span> 名單總覽</div>
     <div class="nav-item" onclick="exportCSV()"><span class="nav-icon">📤</span> 匯出 CSV</div>
     <div class="nav-item" onclick="clearAll()"><span class="nav-icon">🗑</span> 清空名單</div>
-    <div class="nav-item" onclick="doLogout()" style="margin-top:auto;color:#DC2626;"><span class="nav-icon">🔒</span> 登出</div>
+    <div class="nav-item" onclick="document.getElementById('pw-modal').classList.add('open')"><span class="nav-icon">🔑</span> 更改密碼</div>
+    <div class="nav-item" onclick="doLogout()" style="color:#DC2626;"><span class="nav-icon">🔒</span> 登出</div>
   </nav>
   <div class="sidebar-footer">
     騰雲運算 AI 爬蟲成長計劃<br>
@@ -497,6 +519,21 @@
   </div>
 </div>
 
+<!-- CHANGE PASSWORD MODAL -->
+<div class="pw-modal-overlay" id="pw-modal" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="pw-modal">
+    <h3>🔑 更改密碼</h3>
+    <input type="password" id="pw-current" placeholder="目前密碼">
+    <input type="password" id="pw-new" placeholder="新密碼（至少 6 字元）">
+    <input type="password" id="pw-confirm" placeholder="確認新密碼">
+    <div class="pw-error" id="pw-error"></div>
+    <div class="pw-modal-footer">
+      <button class="btn btn-outline" onclick="document.getElementById('pw-modal').classList.remove('open')">取消</button>
+      <button class="btn btn-primary" onclick="changePassword()">確認更改</button>
+    </div>
+  </div>
+</div>
+
 <!-- TOAST -->
 <div class="toast" id="toast"></div>
 
@@ -539,6 +576,33 @@ async function doLogout() {
   }).catch(() => {});
   clearToken();
   location.reload();
+}
+
+async function changePassword() {
+  const current  = document.getElementById('pw-current').value;
+  const newPw    = document.getElementById('pw-new').value;
+  const confirm  = document.getElementById('pw-confirm').value;
+  const errEl    = document.getElementById('pw-error');
+  errEl.textContent = '';
+  if (newPw !== confirm) { errEl.textContent = '新密碼與確認密碼不一致'; return; }
+  if (newPw.length < 6)  { errEl.textContent = '新密碼至少需要 6 個字元'; return; }
+  try {
+    const res = await fetch('/api/change-password', {
+      method: 'POST',
+      headers: authHeader(),
+      body: JSON.stringify({ current, new: newPw })
+    });
+    const json = await res.json();
+    if (json.success) {
+      document.getElementById('pw-modal').classList.remove('open');
+      ['pw-current','pw-new','pw-confirm'].forEach(id => document.getElementById(id).value = '');
+      showToast('✅ 密碼已更新，下次登入生效');
+    } else {
+      errEl.textContent = json.error || '更改失敗';
+    }
+  } catch(e) {
+    errEl.textContent = '連線失敗';
+  }
 }
 
 function authHeader() {
