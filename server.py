@@ -3,9 +3,17 @@ import http.server
 import json
 import os
 import datetime
+import secrets
 from urllib.parse import urlparse
 
+# ── 帳號設定（可改） ──────────────────────────────────────────────────────────
+ADMIN_USERNAME = os.environ.get('ADMIN_USER', 'admin')
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASS', 'skycloud2026')
+
 DATA_FILE = os.path.join(os.path.dirname(__file__), 'leads.json')
+
+# 執行期 session tokens（重啟後失效，需重新登入）
+_sessions = set()
 
 def load_leads():
     if not os.path.exists(DATA_FILE):
@@ -18,8 +26,16 @@ def save_leads(leads):
         json.dump(leads, f, ensure_ascii=False, indent=2)
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+
+    def _auth(self):
+        token = self.headers.get('X-Token', '')
+        return token in _sessions
+
     def do_GET(self):
-        if urlparse(self.path).path == '/api/leads':
+        path = urlparse(self.path).path
+        if path == '/api/leads':
+            if not self._auth():
+                return self._json(401, {'success': False, 'error': 'Unauthorized'})
             leads = load_leads()
             for i, lead in enumerate(leads):
                 lead['rowIndex'] = i + 2
@@ -28,12 +44,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             super().do_GET()
 
     def do_POST(self):
-        if urlparse(self.path).path == '/api/leads':
-            length = int(self.headers.get('Content-Length', 0))
-            data = json.loads(self.rfile.read(length))
-            leads = load_leads()
-            action = data.get('action', 'addRow')
+        path = urlparse(self.path).path
+        length = int(self.headers.get('Content-Length', 0))
+        data = json.loads(self.rfile.read(length)) if length else {}
 
+        if path == '/api/login':
+            if data.get('username') == ADMIN_USERNAME and data.get('password') == ADMIN_PASSWORD:
+                token = secrets.token_hex(32)
+                _sessions.add(token)
+                self._json(200, {'success': True, 'token': token})
+            else:
+                self._json(401, {'success': False, 'error': '帳號或密碼錯誤'})
+
+        elif path == '/api/logout':
+            _sessions.discard(self.headers.get('X-Token', ''))
+            self._json(200, {'success': True})
+
+        elif path == '/api/leads':
+            # 表單送出（前台）不需驗證，後台操作需驗證
+            action = data.get('action', 'addRow')
+            if action != 'addRow' and not self._auth():
+                return self._json(401, {'success': False, 'error': 'Unauthorized'})
+
+            leads = load_leads()
             if action == 'addRow':
                 leads.append({
                     'name':      data.get('name', ''),
@@ -64,7 +97,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, X-Token')
         self.end_headers()
 
     def _json(self, code, obj):
@@ -79,6 +112,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}]", fmt % args)
 
 if __name__ == '__main__':
-    server = http.server.HTTPServer(('', 8765), Handler)
+    print(f'Admin: {ADMIN_USERNAME} / {ADMIN_PASSWORD}')
     print('Server running on http://localhost:8765')
-    server.serve_forever()
+    http.server.HTTPServer(('', 8765), Handler).serve_forever()

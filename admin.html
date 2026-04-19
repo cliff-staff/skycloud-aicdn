@@ -269,6 +269,43 @@
   }
   .toast.show { transform: translateY(0); opacity: 1; }
 
+  /* LOGIN OVERLAY */
+  .login-overlay {
+    position: fixed; inset: 0; z-index: 1000;
+    background: var(--gray-100);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .login-card {
+    background: var(--white); border-radius: 14px;
+    box-shadow: var(--shadow-lg); padding: 48px 40px;
+    width: 360px; text-align: center;
+  }
+  .login-logo {
+    font-family: 'Space Mono', monospace; font-size: 18px;
+    font-weight: 700; color: var(--blue); letter-spacing: 1px;
+    margin-bottom: 4px;
+  }
+  .login-sub { font-size: 12px; color: var(--gray-500); margin-bottom: 32px; }
+  .login-card input {
+    width: 100%; padding: 10px 14px; border: 1px solid var(--gray-200);
+    border-radius: 8px; font-size: 14px; color: var(--gray-900);
+    background: var(--gray-50); outline: none; margin-bottom: 12px;
+    font-family: 'Noto Sans TC', sans-serif; box-sizing: border-box;
+    transition: border-color 0.15s;
+  }
+  .login-card input:focus { border-color: var(--blue); background: white; }
+  .login-btn {
+    width: 100%; padding: 11px; background: var(--blue); color: white;
+    border: none; border-radius: 8px; font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: background 0.15s;
+    font-family: 'Noto Sans TC', sans-serif;
+  }
+  .login-btn:hover { background: var(--blue-dark); }
+  .login-error {
+    color: #DC2626; font-size: 13px; margin-top: 10px;
+    min-height: 18px;
+  }
+
   /* RESPONSIVE */
   @media (max-width: 900px) {
     .sidebar { display: none; }
@@ -284,6 +321,19 @@
 </head>
 <body>
 
+<!-- LOGIN OVERLAY -->
+<div class="login-overlay" id="login-overlay">
+  <div class="login-card">
+    <div class="login-logo">SKYCLOUD</div>
+    <div class="login-sub">名單管理平台</div>
+    <input type="text" id="login-user" placeholder="帳號" autocomplete="username">
+    <input type="password" id="login-pass" placeholder="密碼" autocomplete="current-password"
+           onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="login-btn" onclick="doLogin()">登入</button>
+    <div class="login-error" id="login-error"></div>
+  </div>
+</div>
+
 <!-- SIDEBAR -->
 <aside class="sidebar">
   <div class="sidebar-logo">
@@ -294,6 +344,7 @@
     <div class="nav-item active"><span class="nav-icon">📋</span> 名單總覽</div>
     <div class="nav-item" onclick="exportCSV()"><span class="nav-icon">📤</span> 匯出 CSV</div>
     <div class="nav-item" onclick="clearAll()"><span class="nav-icon">🗑</span> 清空名單</div>
+    <div class="nav-item" onclick="doLogout()" style="margin-top:auto;color:#DC2626;"><span class="nav-icon">🔒</span> 登出</div>
   </nav>
   <div class="sidebar-footer">
     騰雲運算 AI 爬蟲成長計劃<br>
@@ -452,14 +503,57 @@
 <script>
 const GAS_URL = '/api/leads';
 
+// ─── AUTH ─────────────────────────────────────────────────────────────────
+function getToken() { return localStorage.getItem('admin_token') || ''; }
+function setToken(t) { localStorage.setItem('admin_token', t); }
+function clearToken() { localStorage.removeItem('admin_token'); }
+
+async function doLogin() {
+  const username = document.getElementById('login-user').value.trim();
+  const password = document.getElementById('login-pass').value;
+  const errEl = document.getElementById('login-error');
+  errEl.textContent = '';
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+    const json = await res.json();
+    if (json.success) {
+      setToken(json.token);
+      document.getElementById('login-overlay').style.display = 'none';
+      fetchLeads();
+    } else {
+      errEl.textContent = json.error || '登入失敗';
+    }
+  } catch(e) {
+    errEl.textContent = '無法連線，請確認 server 已啟動';
+  }
+}
+
+async function doLogout() {
+  await fetch('/api/logout', {
+    method: 'POST',
+    headers: { 'X-Token': getToken() }
+  }).catch(() => {});
+  clearToken();
+  location.reload();
+}
+
+function authHeader() {
+  return { 'Content-Type': 'application/json', 'X-Token': getToken() };
+}
+
 // ─── IN-MEMORY CACHE ──────────────────────────────────────────────────────
 let leadsCache = [];
 
-// ─── FETCH FROM GOOGLE SHEETS ─────────────────────────────────────────────
+// ─── FETCH LEADS ──────────────────────────────────────────────────────────
 async function fetchLeads() {
   setLoadingState(true);
   try {
-    const res = await fetch(GAS_URL, { method: 'GET' });
+    const res = await fetch(GAS_URL, { method: 'GET', headers: { 'X-Token': getToken() } });
+    if (res.status === 401) { clearToken(); location.reload(); return; }
     const json = await res.json();
     if (json.success) {
       leadsCache = json.data || [];
@@ -556,7 +650,7 @@ async function updateStatus(rowIndex, el) {
   try {
     await fetch(GAS_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeader(),
       body: JSON.stringify({ action: 'updateRow', rowIndex, status: val })
     });
     showToast('✅ 狀態已更新');
@@ -624,7 +718,7 @@ async function saveLead() {
   try {
     await fetch(GAS_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeader(),
       body: JSON.stringify(payload)
     });
     showToast(rowIndex ? '✅ 已更新' : '✅ 已新增');
@@ -656,7 +750,7 @@ function exportCSV() {
 }
 
 function clearAll() {
-  showToast('⚠️ 請直接在 Google Sheets 中刪除資料');
+  showToast('⚠️ 請直接刪除 leads.json 中的資料');
 }
 
 // ─── TOAST ────────────────────────────────────────────────────────────────
@@ -668,10 +762,13 @@ function showToast(msg) {
 }
 
 // ─── AUTO REFRESH every 30s ───────────────────────────────────────────────
-setInterval(fetchLeads, 30000);
+setInterval(() => { if (getToken()) fetchLeads(); }, 30000);
 
 // ─── INIT ─────────────────────────────────────────────────────────────────
-fetchLeads();
+if (getToken()) {
+  document.getElementById('login-overlay').style.display = 'none';
+  fetchLeads();
+}
 </script>
 </body>
 </html>
